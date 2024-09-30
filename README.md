@@ -1,7 +1,7 @@
 
 # Telegram AI Digest Generator
 
-![telegram-cloud-photo-size-1-5177377458519911724-y](https://github.com/user-attachments/assets/9aa69601-3b56-4dc2-bc09-ce4f10d63523)
+![telegram-ai-digest-generator](https://github.com/user-attachments/assets/f35701c3-55de-4f5d-b287-8012b901a2eb)
 
 _Sponsored by [t.me/aizvestia](https://t.me/aizvestia)_
 
