@@ -1,7 +1,8 @@
 
 # Telegram AI Digest Generator
 
-Sponsored by tg.me/aizvestia
+_Sponsored by [t.me/aizvestia](t.me/aizvestia)_
+
 This Python script fetches messages from a Telegram channel, processes them into a digest using the Claude AI API, and generates an image using the Replicate API. The resulting digest and image are then sent to the user's saved Telegram messages.
 
 ## Features
