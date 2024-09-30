@@ -1,15 +1,17 @@
 
 # Telegram AI Digest Generator
 
+![telegram-cloud-photo-size-1-5177377458519911724-y](https://github.com/user-attachments/assets/9aa69601-3b56-4dc2-bc09-ce4f10d63523)
+
 _Sponsored by [t.me/aizvestia](https://t.me/aizvestia)_
 
-This Python script fetches messages from a Telegram channel, processes them into a digest using the Claude AI API, and generates an image using the Replicate API. The resulting digest and image are then sent to the user's saved Telegram messages.
+Python script fetches Telegram channel messages, processes them into a digest via Claude AI, generates an image with Replicate API, and sends both to user's saved Telegram messages.
 
 ## Features
 
 - **Telegram API**: Fetches messages from a Telegram channel.
 - **Claude AI**: Generates a digest from the combined messages.
-- **Replicate API**: Generates an image based on the digest.
+- **Replicate API**: Generates an image based on the digest (FLUX + LoRa).
 - **Asyncio**: Utilizes asynchronous programming to handle API requests efficiently.
 
 ## Requirements
@@ -53,28 +55,6 @@ REPLICATE_API_TOKEN=<your_replicate_api_token>
 pip install -r requirements.txt
 ```
 
-## How to Obtain API Tokens
-
-### Telegram API Credentials
-
-1. Go to [Telegram's my.telegram.org](https://my.telegram.org/) and log in with your Telegram account.
-2. Navigate to the "API development tools" section.
-3. Create a new application and you will receive your `API_ID` and `API_HASH`.
-4. Use your Telegram-registered phone number for the `PHONE_NUMBER` value.
-5. Find the username of the Telegram channel you wish to fetch messages from and add it to `CHANNEL_USERNAME`.
-
-### Claude AI API Key
-
-1. Register or sign in to Claude AI (from Anthropic) via their developer console.
-2. Go to the API section and generate your API key.
-3. Use this key as `CLAUDE_API_KEY` in your `.env` file.
-
-### Replicate API Token
-
-1. Sign up or log in at [Replicate](https://replicate.com/).
-2. Navigate to the account settings and find your API token.
-3. Use the API token as `REPLICATE_API_TOKEN` in your `.env` file.
-
 ## Usage
 
 To run the script, use the following command:
@@ -100,6 +80,28 @@ The script requires the following environment variables to be set in a `.env` fi
 - `CHANNEL_USERNAME`: The username of the Telegram channel to fetch messages from.
 - `CLAUDE_API_KEY`: API key for Claude AI to generate text digest.
 - `REPLICATE_API_TOKEN`: API token for Replicate API to generate images.
+
+## How to Obtain API Tokens
+
+### Telegram API Credentials
+
+1. Go to [Telegram's my.telegram.org](https://my.telegram.org/) and log in with your Telegram account.
+2. Navigate to the "API development tools" section.
+3. Create a new application and you will receive your `API_ID` and `API_HASH`.
+4. Use your Telegram-registered phone number for the `PHONE_NUMBER` value.
+5. Find the username of the Telegram channel you wish to fetch messages from and add it to `CHANNEL_USERNAME`.
+
+### Claude AI API Key
+
+1. Register or sign in to Claude AI (from Anthropic) via their developer console.
+2. Go to the API section and generate your API key.
+3. Use this key as `CLAUDE_API_KEY` in your `.env` file.
+
+### Replicate API Token
+
+1. Sign up or log in at [Replicate](https://replicate.com/).
+2. Navigate to the account settings and find your API token.
+3. Use the API token as `REPLICATE_API_TOKEN` in your `.env` file.
 
 ## Logging
 
