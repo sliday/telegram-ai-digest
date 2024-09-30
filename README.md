@@ -63,6 +63,18 @@ To run the script, use the following command:
 python digest.py
 ```
 
+### Date Range Arguments
+
+This script enables custom date ranges for digests via `start_date` and `end_date` arguments in `YYYY-MM-DD` format, defining the message fetch period. Without arguments, it defaults to the last 7 days, allowing for various timeframes like weekly reports or project milestones.
+
+Example usage with date range:
+
+```bash
+python digest.py --start_date 2023-09-01 --end_date 2023-09-07
+```
+
+In this example, the script fetches messages from the specified Telegram channel between September 1-7, 2023. Without these arguments, it generates a digest for the last 7 days by default.
+
 The script will:
 1. Load the environment variables from the `.env` file.
 2. Fetch messages from the specified Telegram channel.
