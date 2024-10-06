@@ -201,34 +201,36 @@ def generate_and_save_image(prompt):
     try:
         logging.info(f"Generating image with prompt: {prompt}")
         
-        # output = replicate.run(
-        #     "black-forest-labs/flux-pro",
-        #     input={
-        #         "prompt": prompt,
-        #         "steps": 28,
-        #         "width": 1024,
-        #         "aspect_ratio": "4:5",
-        #         "height": 1024
-        #     }
-        # )
-
         output = replicate.run(
-            "lucataco/flux-dev-lora:613a21a57e8545532d2f4016a7c3cfa3c7c63fded03001c2e69183d557a929db",
+            "black-forest-labs/flux-1.1-pro",
             input={
-                "image": "https://dl.dropboxusercontent.com/scl/fi/nboue50qrkr9iqbbev2wd/TM-1989-Dec-HQ-OCR.jpg?rlkey=p5iiym7m412p4wrrgx5plybeo&dl=0",
                 "prompt": prompt,
-                "hf_lora": "Fihade/Retro-Collage-Art-Flux-Dev",
-                # "hf_lora": "glif/Brain-Melt-Acid-Art",
-                "lora_scale": 0.8,
-                "num_outputs": 1,
-                "aspect_ratio": "4:5",
+                "steps": 28,
                 "output_format": "webp",
-                "guidance_scale": 3.5,
                 "output_quality": 80,
-                "prompt_strength": 0.91,
-                "num_inference_steps": 32
+                "safety_tolerance": 2,
+                "aspect_ratio": "4:5",
+                "prompt_upsampling": True
             }
-        )     
+        )
+
+        # output = replicate.run(
+        #     "lucataco/flux-dev-lora:613a21a57e8545532d2f4016a7c3cfa3c7c63fded03001c2e69183d557a929db",
+        #     input={
+        #         "image": "https://dl.dropboxusercontent.com/scl/fi/nboue50qrkr9iqbbev2wd/TM-1989-Dec-HQ-OCR.jpg?rlkey=p5iiym7m412p4wrrgx5plybeo&dl=0",
+        #         "prompt": prompt,
+        #         "hf_lora": "Fihade/Retro-Collage-Art-Flux-Dev",
+        #         # "hf_lora": "glif/Brain-Melt-Acid-Art",
+        #         "lora_scale": 0.8,
+        #         "num_outputs": 1,
+        #         "aspect_ratio": "4:5",
+        #         "output_format": "webp",
+        #         "guidance_scale": 3.5,
+        #         "output_quality": 80,
+        #         "prompt_strength": 0.91,
+        #         "num_inference_steps": 32
+        #     }
+        # )     
         
         logging.info(f"Replicate output: {output}")
         
