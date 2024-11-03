@@ -13,6 +13,7 @@ import re
 import subprocess
 import argparse
 from datetime import datetime
+import random
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -197,41 +198,55 @@ Focus on visual elements and their arrangement. No words, no quotes, no text. Be
         image_prompt = await call_claude_api(session, prompt)
         return image_prompt.strip()
 
-def generate_and_save_image(prompt):
-    try:
-        logging.info(f"Generating image with prompt: {prompt}")
-        
-        output = replicate.run(
-            "black-forest-labs/flux-1.1-pro",
-            input={
-                "prompt": prompt,
-                "steps": 28,
-                "output_format": "webp",
-                "output_quality": 80,
-                "safety_tolerance": 2,
-                "aspect_ratio": "4:5",
-                "prompt_upsampling": True
-            }
-        )
+# Add these styles after the existing constants
+REDPANDA_STYLES = [
+    "realistic_image",
+    "digital_illustration",
+    "digital_illustration/pixel_art",
+    "digital_illustration/hand_drawn",
+    "digital_illustration/grain",
+    "digital_illustration/infantile_sketch",
+    "digital_illustration/2d_art_poster",
+    "digital_illustration/handmade_3d",
+    "digital_illustration/hand_drawn_outline",
+    "digital_illustration/engraving_color",
+    "digital_illustration/2d_art_poster_2",
+    "realistic_image/b_and_w",
+    "realistic_image/hard_flash",
+    "realistic_image/hdr",
+    "realistic_image/natural_light",
+    "realistic_image/studio_portrait",
+    "realistic_image/enterprise",
+    "realistic_image/motion_blur"
+]
 
-        # output = replicate.run(
-        #     "lucataco/flux-dev-lora:613a21a57e8545532d2f4016a7c3cfa3c7c63fded03001c2e69183d557a929db",
-        #     input={
-        #         "image": "https://dl.dropboxusercontent.com/scl/fi/nboue50qrkr9iqbbev2wd/TM-1989-Dec-HQ-OCR.jpg?rlkey=p5iiym7m412p4wrrgx5plybeo&dl=0",
-        #         "prompt": prompt,
-        #         "hf_lora": "Fihade/Retro-Collage-Art-Flux-Dev",
-        #         # "hf_lora": "glif/Brain-Melt-Acid-Art",
-        #         "lora_scale": 0.8,
-        #         "num_outputs": 1,
-        #         "aspect_ratio": "4:5",
-        #         "output_format": "webp",
-        #         "guidance_scale": 3.5,
-        #         "output_quality": 80,
-        #         "prompt_strength": 0.91,
-        #         "num_inference_steps": 32
-        #     }
-        # )     
+def generate_and_save_image(prompt, model="flux"):
+    try:
+        logging.info(f"Generating image with {model} model. Prompt: {prompt}")
         
+        if model == "flux":
+            output = replicate.run(
+                "black-forest-labs/flux-1.1-pro",
+                input={
+                    "prompt": prompt,
+                    "steps": 28,
+                    "output_format": "webp",
+                    "output_quality": 80,
+                    "safety_tolerance": 2,
+                    "aspect_ratio": "4:5",
+                    "prompt_upsampling": True
+                }
+            )
+        else:  # redpanda
+            output = replicate.run(
+                "recraft-ai/recraft-v3",
+                input={
+                    "size": "1024x1707",  # Close to 4:5 ratio
+                    "style": random.choice(REDPANDA_STYLES),
+                    "prompt": prompt
+                }
+            )
+
         logging.info(f"Replicate output: {output}")
         
         if isinstance(output, list) and len(output) > 0:
@@ -280,6 +295,8 @@ async def main():
     parser = argparse.ArgumentParser(description='Generate digest for a specific date range.')
     parser.add_argument('--startdate', type=str, required=True, help='Start date in YYYY-MM-DD format')
     parser.add_argument('--enddate', type=str, required=True, help='End date in YYYY-MM-DD format')
+    parser.add_argument('--model', type=str, choices=['flux', 'redpanda'], default='flux', 
+                      help='Choose image generation model (default: flux)')
     args = parser.parse_args()
 
     start_date = datetime.strptime(args.startdate, '%Y-%m-%d').replace(tzinfo=UTC)
@@ -334,7 +351,7 @@ async def main():
 
         logging.info(f"Using Replicate API token: {REPLICATE_API_TOKEN[:5]}...{REPLICATE_API_TOKEN[-5:]}")
         
-        image_path = generate_and_save_image(image_prompt)
+        image_path = generate_and_save_image(image_prompt, model=args.model)
         
         if image_path:
             logging.info(f"Generated image saved at: {image_path}")
