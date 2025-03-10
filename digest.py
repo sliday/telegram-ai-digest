@@ -174,32 +174,36 @@ def get_previous_week_range():
 
 async def generate_image_prompt(digest):
     async with aiohttp.ClientSession() as session:
-        prompt = f"""Based on this AI news digest, WRITE a concise image prompt for FLUX 1 PRO. The prompt should:
-- Be in basic telegraphic English
-- Describe a retrofuturistic poster
-- Limit description to roughly 512 characters
-- Description should NOT include quoted text.
-- Include as many characters/objects from the digest as possible
-- Incorporate elements of collage and creative papercut application
-- Evoke a sense of potpourri (a mixture of diverse elements)
-- Mention retrofuturism and techno-optimism
-- Be really concise, comma-separate objects from digest.
-
-Sample output, DO NOT, use as reference, borrow structure or ideas, just write your own:
-```A retrofuturistic magazine poster, retro-styled, no text, no words, collage, paper-cut, humanoid robot (Unitree G1), AI-generated avatars, stylized brain with circuit patterns, musical notes from headphones, a scientist with AI ideas, people with oversized smartphones, a film reel turning into binary, investment charts, art supplies merging with tech, and a graduation cap with an AI chip.```
+        prompt = f"""Create a minimalist image prompt for FLUX 1 PRO that:
+- Uses simple telegraphic English with comma-separated elements
+- Describes a clean retrofuturistic poster design
+- ABSOLUTELY NO TEXT OR TEXT-LIKE ELEMENTS of any kind
+- Keeps under 300 characters total
+- Selects 3-5 key visual concepts from the digest (not all)
+- Uses abstract visual metaphors instead of literal representations
+- Emphasizes white space and clean composition
+- Incorporates collage and papercut aesthetic
+- Focuses on retrofuturism and techno-optimism
 
 AI news digest:
 ===
 {digest}
 ===
 
-Focus on visual elements and their arrangement. No words, no quotes, no text. Be weird, unorthodox, funny, creative and vivid in your description. Output only the image prompt."""
+Important: 
+- NO text, NO UI elements, NO logos, NO numbers, NO labels whatsoever
+- Favor abstract symbols over detailed illustrations
+- Emphasize composition and negative space
+- Be weird and creative but SIMPLE
+
+Output only the final image prompt."""
 
         image_prompt = await call_claude_api(session, prompt)
         return image_prompt.strip()
 
 # Add these styles after the existing constants
 REDPANDA_STYLES = [
+    "any",
     "realistic_image",
     "digital_illustration",
     "digital_illustration/pixel_art",
@@ -226,15 +230,13 @@ def generate_and_save_image(prompt, model="flux"):
         
         if model == "flux":
             output = replicate.run(
-                "black-forest-labs/flux-1.1-pro",
+                "black-forest-labs/flux-1.1-pro-ultra",
                 input={
                     "prompt": prompt,
-                    "steps": 28,
-                    "output_format": "webp",
+                    "output_format": "jpg",
                     "output_quality": 80,
                     "safety_tolerance": 2,
-                    "aspect_ratio": "4:5",
-                    "prompt_upsampling": True
+                    "aspect_ratio": "4:5"
                 }
             )
         else:  # redpanda
