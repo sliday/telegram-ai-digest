@@ -1,7 +1,5 @@
 aiohttp
 telethon
 pytz
-replicate
-requests
-logging
-argparse
+anthropic
+reportlab
