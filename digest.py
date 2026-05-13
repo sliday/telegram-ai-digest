@@ -2,21 +2,18 @@ import os
 import asyncio
 import aiohttp
 import logging
+import json
+import re
+import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
+
 from telethon import TelegramClient
 from pytz import UTC
-import replicate
-import requests
-from io import BytesIO
-import re
-import subprocess
-import argparse
-from datetime import datetime
-import random
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 def load_env_from_file(env_file='.env'):
     env_path = Path(env_file)
@@ -30,7 +27,9 @@ def load_env_from_file(env_file='.env'):
     else:
         logging.warning(f".env file not found at {env_path.absolute()}. Using system environment variables.")
 
+
 load_env_from_file()
+
 
 def get_env_variable(var_name):
     value = os.getenv(var_name)
@@ -38,40 +37,29 @@ def get_env_variable(var_name):
         raise ValueError(f"Environment variable '{var_name}' is not set.")
     return value
 
-# Telegram API credentials
+
 try:
     API_ID = int(get_env_variable('API_ID'))
     API_HASH = get_env_variable('API_HASH')
     PHONE_NUMBER = get_env_variable('PHONE_NUMBER')
-    CHANNEL_USERNAME = get_env_variable('CHANNEL_USERNAME')
+    CHANNEL_USERNAMES = [c.strip() for c in get_env_variable('CHANNEL_USERNAMES').split(',')]
     CLAUDE_API_KEY = get_env_variable('CLAUDE_API_KEY')
-    REPLICATE_API_TOKEN = get_env_variable('REPLICATE_API_TOKEN')
+    TARGET_CHANNEL = get_env_variable('TARGET_CHANNEL')
 except ValueError as e:
     logging.error(f"Environment variable error: {str(e)}")
     raise
 
-os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
-logging.info(f"Replicate API token: {REPLICATE_API_TOKEN[:5]}...{REPLICATE_API_TOKEN[-5:]}")
-
 CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
-
-logging.debug(f"API_ID is set: {'Yes' if API_ID else 'No'}")
-logging.debug(f"API_HASH is set: {'Yes' if API_HASH else 'No'}")
-logging.debug(f"PHONE_NUMBER is set: {'Yes' if PHONE_NUMBER else 'No'}")
-logging.debug(f"CHANNEL_USERNAME: {CHANNEL_USERNAME}")
-
-required_vars = ['API_ID', 'API_HASH', 'PHONE_NUMBER', 'CHANNEL_USERNAME', 'CLAUDE_API_KEY', 'REPLICATE_API_TOKEN']
-missing_vars = [var for var in required_vars if not globals().get(var)]
-
-if missing_vars:
-    raise ValueError(f"The following required environment variables are not set: {', '.join(missing_vars)}")
-
 MAX_REQUESTS_PER_MINUTE = 30
 REQUEST_INTERVAL = 60 / MAX_REQUESTS_PER_MINUTE
-
 semaphore = asyncio.Semaphore(MAX_REQUESTS_PER_MINUTE)
 
 client = TelegramClient('session', API_ID, API_HASH)
+
+
+# ---------------------------------------------------------------------------
+# Claude API
+# ---------------------------------------------------------------------------
 
 async def call_claude_api(session, prompt, retry=True):
     headers = {
@@ -79,304 +67,281 @@ async def call_claude_api(session, prompt, retry=True):
         "x-api-key": CLAUDE_API_KEY,
         "anthropic-version": "2023-06-01"
     }
-    
     payload = {
-        "model": "claude-3-5-sonnet-20240620",
-        "max_tokens": 4092,
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 4096,
         "messages": [{"role": "user", "content": prompt}]
     }
-
     async with semaphore:
         try:
-            logging.debug(f"Calling Claude API with prompt length: {len(prompt)}")
             async with session.post(CLAUDE_API_URL, json=payload, headers=headers) as response:
                 if response.status == 200:
                     result = await response.json()
-                    logging.debug("Claude API call successful")
                     return result['content'][0]['text']
                 else:
                     error_text = await response.text()
-                    logging.error(f"API call failed with status {response.status}: {error_text}")
+                    logging.error(f"API call failed {response.status}: {error_text}")
                     if retry:
-                        logging.info("Retrying API call...")
                         await asyncio.sleep(REQUEST_INTERVAL)
                         return await call_claude_api(session, prompt, retry=False)
                     return None
         except Exception as e:
-            logging.error(f"Error in API call: {str(e)}")
+            logging.error(f"Error in API call: {e}")
             if retry:
-                logging.info("Retrying API call...")
                 await asyncio.sleep(REQUEST_INTERVAL)
                 return await call_claude_api(session, prompt, retry=False)
             return None
         finally:
             await asyncio.sleep(REQUEST_INTERVAL)
 
-def format_date_range(start_date, end_date):
-    months_ru = [
-        'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
-        'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
-    ]
-    
-    if start_date.month == end_date.month and start_date.year == end_date.year:
-        return f"{start_date.day}-{end_date.day} {months_ru[end_date.month - 1]}"
-    else:
-        return f"{start_date.day} {months_ru[start_date.month - 1]} - {end_date.day} {months_ru[end_date.month - 1]}"
 
-async def create_digest(messages, start_date, end_date):
-    if not messages:
-        logging.error("No messages to create digest from")
-        return "No messages were found to create a digest."
-    
-    date_range = format_date_range(start_date, end_date)
-    logging.debug(f"Formatted date range: {date_range}")
-    
+async def create_digest(messages_by_channel: dict, start_date: datetime, end_date: datetime):
+    """
+    Returns a dict:
+    {
+        "date_range": "...",
+        "big_news": [{"headline": "...", "summary": "...", "link": "..."}, ...],
+        "minor_news": [{"headline": "...", "link": "..."}, ...]
+    }
+    """
+    total = sum(len(v) for v in messages_by_channel.values())
+    if total == 0:
+        return None
+
+    date_str = f"{start_date.strftime('%Y-%m-%d %H:%M')} - {end_date.strftime('%Y-%m-%d %H:%M')} UTC"
+    combined = ""
+    for channel, msgs in messages_by_channel.items():
+        combined += f"\n\n### Channel: @{channel}\n" + "\n".join(msgs)
+
+    prompt = f"""You are creating a structured Hebrew daily news digest from Telegram channel messages.
+
+Date range: {date_str}
+Total messages: {total}
+
+Classify every story into one of four sections:
+- "conflict": Middle East conflicts, Gaza war, Lebanon, Iran, military operations, hostages
+- "politics": Israeli domestic politics, government, Knesset, legal system, parties
+- "world": global news, international events, economy, tech, anything else
+- "deep": long articles, analyses, or investigative pieces sent as full text — do NOT summarize these; preserve the original text and link them as-is for further reading
+
+Within each section, classify as:
+- "big_news": significant stories — include headline + 2-3 sentence summary (max 5 items total across all sections)
+- "minor_news": smaller updates — headline only (all remaining items)
+
+Rules:
+- Write ALL text in Hebrew.
+- Be concise for conflict/politics/world items. Headlines max 12 words. Summaries max 40 words.
+- Keep original text and phrasing as much as possible. Rephrase only if necessary for clarity or length.
+- Preserve the original t.me message link for each item.
+- If multiple messages cover the same story, merge them into one item.
+- "deep" section items: preserve the original headline/title exactly; do not quote or copy the article body.
+- Every item must include "source" (the @channel handle it came from) and "time" (HH:MM from the message timestamp).
+
+Return ONLY a valid JSON object, no markdown fences, no preamble:
+{{
+  "date_range": "{date_str}",
+  "big_news": [
+    {{"headline": "...", "summary": "...", "link": "https://t.me/...", "section": "conflict", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "summary": "...", "link": "https://t.me/...", "section": "politics", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "summary": "...", "link": "https://t.me/...", "section": "world", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "summary": "...", "link": "https://t.me/...", "section": "deep", "source": "@channel", "time": "HH:MM"}}
+  ],
+  "minor_news": [
+    {{"headline": "...", "link": "https://t.me/...", "section": "conflict", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "link": "https://t.me/...", "section": "politics", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "link": "https://t.me/...", "section": "world", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "link": "https://t.me/...", "section": "deep", "source": "@channel", "time": "HH:MM"}}
+  ]
+}}
+
+Messages:
+{combined}"""
+
     async with aiohttp.ClientSession() as session:
-        prompt = f"""Create a digest for Telegram messages from {date_range}. Summarize key points, include original post links, apply links to the key word in the original post. DO NOT use "learn more" or "подробнее". Use Russian language.
-Format:
-- Title: "Дайджест ИИзвестий за неделю {date_range}"
-- Jump to content, no intro, no outro, no "Here's the digest in the requested format:" kind of text. 
-- Brief intro (2-3 sentences)
-- Sections with emojis (e.g., LLM, Генеративные модели, Подборки курсов, Всякая-всячина)
-- Use dash (-) for news items, NO extra line breaks between items:
-```
-EMOJI Title
-- News1
-- News2
-- News3
-```
-- Include key aspects and brief comments (2-3 sentences max)
-- Link keywords to original posts
-- End with: "#ИИзвестия\n\n@aizvestia"
+        raw = await call_claude_api(session, prompt)
 
-Use Telegram Markdown:
-**bold**, _italic_, __underline__, ~strikethrough~, ||spoiler||, [inline URL](http://www.example.com/), `code`, ```block code```
+    if not raw:
+        return None
 
-Messages to summarize:
-"{messages}"
-
-Output pure markdown, be concise, MUST start with content, no intro. Avoid extra line breaks between list items. Use bold for section titles instead of #."""
-        digest_markdown = await call_claude_api(session, prompt)
-        return digest_markdown
-
-def get_previous_week_range():
-    today = datetime.now(UTC)
-    if today.weekday() == 6:  # If today is Sunday
-        most_recent_monday = today - timedelta(days=6)
-        end_date = today
-    else:
-        most_recent_monday = today - timedelta(days=today.weekday() + 1)
-        end_date = most_recent_monday + timedelta(days=6)
-    
-    start_date = most_recent_monday.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_date = end_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-    return start_date, end_date
-
-async def generate_image_prompt(digest):
-    async with aiohttp.ClientSession() as session:
-        prompt = f"""Create a minimalist image prompt for FLUX 1 PRO that:
-- Uses simple telegraphic English with comma-separated elements
-- Describes a clean retrofuturistic poster design
-- ABSOLUTELY NO TEXT OR TEXT-LIKE ELEMENTS of any kind
-- Keeps under 300 characters total
-- Selects 3-5 key visual concepts from the digest (not all)
-- Uses abstract visual metaphors instead of literal representations
-- Emphasizes white space and clean composition
-- Incorporates collage and papercut aesthetic
-- Focuses on retrofuturism and techno-optimism
-
-AI news digest:
-===
-{digest}
-===
-
-Important: 
-- NO text, NO UI elements, NO logos, NO numbers, NO labels whatsoever
-- Favor abstract symbols over detailed illustrations
-- Emphasize composition and negative space
-- Be weird and creative but SIMPLE
-
-Output only the final image prompt."""
-
-        image_prompt = await call_claude_api(session, prompt)
-        return image_prompt.strip()
-
-# Add these styles after the existing constants
-REDPANDA_STYLES = [
-    "any",
-    "realistic_image",
-    "digital_illustration",
-    "digital_illustration/pixel_art",
-    "digital_illustration/hand_drawn",
-    "digital_illustration/grain",
-    "digital_illustration/infantile_sketch",
-    "digital_illustration/2d_art_poster",
-    "digital_illustration/handmade_3d",
-    "digital_illustration/hand_drawn_outline",
-    "digital_illustration/engraving_color",
-    "digital_illustration/2d_art_poster_2",
-    "realistic_image/b_and_w",
-    "realistic_image/hard_flash",
-    "realistic_image/hdr",
-    "realistic_image/natural_light",
-    "realistic_image/studio_portrait",
-    "realistic_image/enterprise",
-    "realistic_image/motion_blur"
-]
-
-def generate_and_save_image(prompt, model="flux"):
     try:
-        logging.info(f"Generating image with {model} model. Prompt: {prompt}")
-        
-        if model == "flux":
-            output = replicate.run(
-                "black-forest-labs/flux-1.1-pro-ultra",
-                input={
-                    "prompt": prompt,
-                    "output_format": "jpg",
-                    "output_quality": 80,
-                    "safety_tolerance": 2,
-                    "aspect_ratio": "4:5"
-                }
-            )
-        else:  # redpanda
-            output = replicate.run(
-                "recraft-ai/recraft-v3",
-                input={
-                    "size": "1024x1707",  # Close to 4:5 ratio
-                    "style": random.choice(REDPANDA_STYLES),
-                    "prompt": prompt
-                }
-            )
+        clean = re.sub(r'^```[a-z]*\n?|\n?```$', '', raw.strip())
+        return json.loads(clean)
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to parse Claude JSON: {e}\nRaw: {raw[:500]}")
+        return None
 
-        logging.info(f"Replicate output: {output}")
-        
-        if isinstance(output, list) and len(output) > 0:
-            image_url = output[0]
-        elif isinstance(output, str):
-            image_url = output
-        else:
-            logging.error(f"Unexpected output format from Replicate: {output}")
-            return None
 
-        # Download the image
-        response = requests.get(image_url)
-        response.raise_for_status()
-        
-        # Save the original webp image
-        with open("digest_illustration_original.webp", "wb") as f:
-            f.write(response.content)
-        
-        # Convert webp to png using ImageMagick
-        try:
-            subprocess.run(["convert", "digest_illustration_original.webp", "digest_illustration.png"], check=True)
-            logging.info("Image converted successfully")
-            return "digest_illustration.png"
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Error converting image: {e}")
-            return "digest_illustration_original.webp"  # Return the original webp if conversion fails
-        
-    except replicate.exceptions.ReplicateError as e:
-        logging.error(f"Replicate API error: {str(e)}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error downloading image: {str(e)}")
+
+# ---------------------------------------------------------------------------
+# Telegraph publishing
+# ---------------------------------------------------------------------------
+
+TOKEN_FILE = "telegraph_token.txt"
+
+
+def _meta_text(item):
+    parts = []
+    if item.get("source"):
+        parts.append(item["source"])
+    if item.get("time"):
+        parts.append(item["time"])
+    return " | ".join(parts)
+
+
+def _deep_item_node(item):
+    meta = _meta_text(item)
+    headline = item.get("headline", "")
+    link = item.get("link", "")
+    label = f"כתבה מ-{meta}: " if meta else ""
+    children = [label + headline]
+    if link:
+        children += [" — ", {"tag": "a", "attrs": {"href": link}, "children": ["לקריאה"]}]
+    return {"tag": "p", "children": children}
+
+
+def _section_nodes(items_big, items_minor, is_deep=False):
+    nodes = []
+    if is_deep:
+        return [_deep_item_node(i) for i in items_big + items_minor]
+    for item in items_big:
+        nodes.append({"tag": "h4", "children": [item.get("headline", "")]})
+        meta = _meta_text(item)
+        if meta:
+            nodes.append({"tag": "p", "children": [{"tag": "i", "children": [meta]}]})
+        if item.get("summary"):
+            nodes.append({"tag": "p", "children": [item["summary"]]})
+        if item.get("link"):
+            nodes.append({"tag": "p", "children": [
+                {"tag": "a", "attrs": {"href": item["link"]}, "children": ["קישור למקור"]}
+            ]})
+    if items_minor:
+        li_nodes = []
+        for item in items_minor:
+            meta = _meta_text(item)
+            children = [item.get("headline", "")]
+            if meta:
+                children += [f" ({meta})"]
+            if item.get("link"):
+                children += [" — ", {"tag": "a", "attrs": {"href": item["link"]}, "children": ["קישור"]}]
+            li_nodes.append({"tag": "li", "children": children})
+        nodes.append({"tag": "ul", "children": li_nodes})
+    return nodes
+
+
+def publish_to_telegraph(digest: dict) -> str:
+    from telegraph import Telegraph
+
+    token_path = Path(TOKEN_FILE)
+    if token_path.exists():
+        t = Telegraph(access_token=token_path.read_text().strip())
+    else:
+        t = Telegraph()
+        t.create_account(short_name="daily-digest", author_name="דיג'סט יומי")
+        token_path.write_text(t.get_access_token())
+
+    sections = [
+        ("עדכוני לחימה והסכסוך", "conflict", False),
+        ("פוליטיקה ישראלית", "politics", False),
+        ("כותרות נוספות", "world", False),
+        ("לקריאה נוספת", "deep", True),
+    ]
+
+    content = []
+    for heading, key, is_deep in sections:
+        big = [i for i in digest.get("big_news", []) if i.get("section") == key]
+        minor = [i for i in digest.get("minor_news", []) if i.get("section") == key]
+        if not big and not minor:
+            continue
+        content.append({"tag": "h3", "children": [heading]})
+        content.extend(_section_nodes(big, minor, is_deep=is_deep))
+
+    title = f"דיג'סט יומי — {digest['date_range']}"
+    page = t.create_page(title=title, content=content, author_name="דיג'סט יומי")
+    return page['url']
+
+
+# ---------------------------------------------------------------------------
+# Telegram helpers
+# ---------------------------------------------------------------------------
+
+async def fetch_messages(channel_username: str, start_date: datetime, end_date: datetime) -> list:
+    messages = []
+    try:
+        channel = await client.get_entity(channel_username)
+        logging.info(f"Fetching from: {channel.title} (@{channel_username})")
+        async for message in client.iter_messages(channel, offset_date=end_date, limit=None):
+            if message.date < start_date:
+                break
+            if message.text and start_date <= message.date <= end_date:
+                link = f"https://t.me/{channel_username}/{message.id}"
+                messages.append(f"[{message.date.strftime('%H:%M')}] {message.text}\nLink: {link}")
+        messages.reverse()
+        logging.info(f"Fetched {len(messages)} messages from @{channel_username}")
     except Exception as e:
-        logging.error(f"Error in generate_and_save_image: {str(e)}")
-    return None
+        logging.error(f"Error fetching from @{channel_username}: {e}")
+    return messages
 
-def remove_extra_line_breaks(text):
-    # Remove extra line breaks between list items
-    text = re.sub(r'(\n- .+?)\n+(?=\n-)', r'\1', text, flags=re.DOTALL)
-    
-    # Remove extra line breaks between sections
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    
-    return text
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 async def main():
-    parser = argparse.ArgumentParser(description='Generate digest for a specific date range.')
-    parser.add_argument('--startdate', type=str, required=True, help='Start date in YYYY-MM-DD format')
-    parser.add_argument('--enddate', type=str, required=True, help='End date in YYYY-MM-DD format')
-    parser.add_argument('--model', type=str, choices=['flux', 'redpanda'], default='flux', 
-                      help='Choose image generation model (default: flux)')
+    parser = argparse.ArgumentParser(description='Generate daily Telegram digest as Telegraph page.')
+    parser.add_argument('--startdate', type=str, help='Start datetime YYYY-MM-DD or YYYY-MM-DD HH:MM (UTC)')
+    parser.add_argument('--enddate', type=str, help='End datetime YYYY-MM-DD or YYYY-MM-DD HH:MM (UTC)')
     args = parser.parse_args()
 
-    start_date = datetime.strptime(args.startdate, '%Y-%m-%d').replace(tzinfo=UTC)
-    end_date = datetime.strptime(args.enddate, '%Y-%m-%d').replace(hour=23, minute=59, second=59, microsecond=999999, tzinfo=UTC)
+    def parse_dt(s):
+        for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d'):
+            try:
+                return datetime.strptime(s, fmt).replace(tzinfo=UTC)
+            except ValueError:
+                continue
+        raise ValueError(f"Unrecognized date format: {s}")
 
-    logging.info(f"Using phone number: {PHONE_NUMBER}")
+    if args.startdate and args.enddate:
+        start_date = parse_dt(args.startdate)
+        end_date = parse_dt(args.enddate)
+        if len(args.enddate) == 10:
+            end_date = end_date.replace(hour=23, minute=59, second=59)
+    else:
+        end_date = datetime.now(UTC)
+        start_date = end_date - timedelta(hours=24)
+
+    logging.info(f"Digest period: {start_date} -> {end_date}")
+
     await client.start(phone=PHONE_NUMBER)
     logging.info("Connected to Telegram")
 
-    channel = await client.get_entity(CHANNEL_USERNAME)
-    logging.info(f"Retrieved channel entity: {channel.title}")
+    messages_by_channel = {}
+    for username in CHANNEL_USERNAMES:
+        msgs = await fetch_messages(username, start_date, end_date)
+        if msgs:
+            messages_by_channel[username] = msgs
 
-    logging.info(f"Fetching messages from {start_date.strftime('%Y-%m-%d %H:%M:%S')} to {end_date.strftime('%Y-%m-%d %H:%M:%S')}")
-
-    messages = []
-    message_count = 0
-    async for message in client.iter_messages(channel, offset_date=end_date, limit=None):
-        if message.date < start_date:
-            break
-        if start_date <= message.date <= end_date:
-            message_link = None
-            if message.text:
-                message_link = f"https://t.me/{channel.username}/{message.id}"
-                messages.append(f"{message.date.strftime('%Y-%m-%d %H:%M')} - {message.text}\nMessage link: {message_link}")
-                message_count += 1
-                logging.debug(f"Fetched message: Date={message.date}, Has text: True, Message link: {message_link}")
-            else:
-                logging.debug(f"Skipped message: Date={message.date}, Has text: False")
-
-    messages.reverse()
-    logging.info(f"Total messages fetched: {message_count}")
-
-    if not messages:
-        logging.error("No messages were fetched from the channel for the specified week")
+    if not messages_by_channel:
+        logging.error("No messages fetched from any channel.")
+        await client.disconnect()
         return
 
-    combined_messages = "\n\n".join(messages)
-    logging.debug(f"Combined messages length: {len(combined_messages)}")
+    logging.info("Generating digest via Claude...")
+    digest = await create_digest(messages_by_channel, start_date, end_date)
 
-    logging.info("Creating digest using Claude AI...")
-    logging.debug(f"Start date: {start_date}, End date: {end_date}")
-    digest_markdown = await create_digest(combined_messages, start_date, end_date)
+    if not digest:
+        logging.error("Failed to generate digest.")
+        await client.disconnect()
+        return
 
-    if digest_markdown:
-        # Apply post-processing to remove extra line breaks
-        digest_markdown = remove_extra_line_breaks(digest_markdown)
-        
-        logging.debug(f"Processed digest start: {digest_markdown[:500]}")
+    page_url = publish_to_telegraph(digest)
+    logging.info(f"Telegraph page: {page_url}")
 
-        image_prompt = await generate_image_prompt(digest_markdown)
-        logging.info(f"Generated image prompt: {image_prompt}")
-
-        logging.info(f"Using Replicate API token: {REPLICATE_API_TOKEN[:5]}...{REPLICATE_API_TOKEN[-5:]}")
-        
-        image_path = generate_and_save_image(image_prompt, model=args.model)
-        
-        if image_path:
-            logging.info(f"Generated image saved at: {image_path}")
-
-            try:
-                # Send the image with the digest text as caption
-                await client.send_file('me', image_path, caption=digest_markdown, parse_mode='md')
-                logging.info("Digest image with text caption sent to Saved Messages")
-            except Exception as e:
-                logging.error(f"Error sending image with caption: {str(e)}")
-                logging.warning("Sending digest as text only.")
-                await client.send_message('me', digest_markdown, parse_mode='md')
-                logging.info("Digest sent to Saved Messages as text only")
-        else:
-            logging.error("Failed to generate or save image")
-            logging.warning("Sending digest as text only.")
-            await client.send_message('me', digest_markdown, parse_mode='md')
-            logging.info("Digest sent to Saved Messages as text only")
-
-    else:
-        logging.error("Failed to create digest")
+    target = int(TARGET_CHANNEL) if TARGET_CHANNEL.lstrip('-').isdigit() else TARGET_CHANNEL
+    date_str = start_date.strftime('%d.%m.%Y')
+    await client.send_message(target, f"📰 דיג'סט יומי — {date_str}\n{page_url}")
 
     await client.disconnect()
+
 
 if __name__ == "__main__":
     with client:
