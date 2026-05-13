@@ -2,4 +2,4 @@ aiohttp
 telethon
 pytz
 anthropic
-reportlab
+telegraph

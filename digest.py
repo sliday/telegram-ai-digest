@@ -10,12 +10,6 @@ from pathlib import Path
 
 from telethon import TelegramClient
 from pytz import UTC
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, ListFlowable, ListItem
-from reportlab.lib.enums import TA_LEFT, TA_CENTER
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -119,27 +113,44 @@ async def create_digest(messages_by_channel: dict, start_date: datetime, end_dat
     for channel, msgs in messages_by_channel.items():
         combined += f"\n\n### Channel: @{channel}\n" + "\n".join(msgs)
 
-    prompt = f"""You are creating a structured daily news digest from Telegram channel messages.
+    prompt = f"""You are creating a structured Hebrew daily news digest from Telegram channel messages.
 
 Date range: {date_str}
 Total messages: {total}
 
-Classify each story as either:
-- "big_news": significant, impactful stories worth a headline + 2-3 sentence summary (3-7 items max)
-- "minor_news": smaller updates, worth a headline only (remaining items)
+Classify every story into one of four sections:
+- "conflict": Middle East conflicts, Gaza war, Lebanon, Iran, military operations, hostages
+- "politics": Israeli domestic politics, government, Knesset, legal system, parties
+- "world": global news, international events, economy, tech, anything else
+- "deep": long articles, analyses, or investigative pieces sent as full text — do NOT summarize these; preserve the original text and link them as-is for further reading
 
-Write in the same language as the majority of the messages.
+Within each section, classify as:
+- "big_news": significant stories — include headline + 2-3 sentence summary (max 5 items total across all sections)
+- "minor_news": smaller updates — headline only (all remaining items)
 
-Return ONLY a valid JSON object, no markdown fences, no preamble, no explanation:
+Rules:
+- Write ALL text in Hebrew.
+- Be concise for conflict/politics/world items. Headlines max 12 words. Summaries max 40 words.
+- Keep original text and phrasing as much as possible. Rephrase only if necessary for clarity or length.
+- Preserve the original t.me message link for each item.
+- If multiple messages cover the same story, merge them into one item.
+- "deep" section items: preserve the original headline/title exactly; do not quote or copy the article body.
+- Every item must include "source" (the @channel handle it came from) and "time" (HH:MM from the message timestamp).
+
+Return ONLY a valid JSON object, no markdown fences, no preamble:
 {{
   "date_range": "{date_str}",
   "big_news": [
-    {{"headline": "...", "summary": "...", "link": "https://t.me/..."}},
-    ...
+    {{"headline": "...", "summary": "...", "link": "https://t.me/...", "section": "conflict", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "summary": "...", "link": "https://t.me/...", "section": "politics", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "summary": "...", "link": "https://t.me/...", "section": "world", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "summary": "...", "link": "https://t.me/...", "section": "deep", "source": "@channel", "time": "HH:MM"}}
   ],
   "minor_news": [
-    {{"headline": "...", "link": "https://t.me/..."}},
-    ...
+    {{"headline": "...", "link": "https://t.me/...", "section": "conflict", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "link": "https://t.me/...", "section": "politics", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "link": "https://t.me/...", "section": "world", "source": "@channel", "time": "HH:MM"}},
+    {{"headline": "...", "link": "https://t.me/...", "section": "deep", "source": "@channel", "time": "HH:MM"}}
   ]
 }}
 
@@ -160,126 +171,93 @@ Messages:
         return None
 
 
+
 # ---------------------------------------------------------------------------
-# PDF generation
+# Telegraph publishing
 # ---------------------------------------------------------------------------
 
-def build_pdf(digest: dict, output_path: str) -> str:
-    doc = SimpleDocTemplate(
-        output_path,
-        pagesize=A4,
-        leftMargin=20 * mm,
-        rightMargin=20 * mm,
-        topMargin=20 * mm,
-        bottomMargin=20 * mm,
-    )
+TOKEN_FILE = "telegraph_token.txt"
 
-    base = getSampleStyleSheet()
 
-    title_style = ParagraphStyle(
-        'DigestTitle',
-        parent=base['Normal'],
-        fontSize=22,
-        leading=28,
-        textColor=colors.HexColor('#1a1a2e'),
-        alignment=TA_CENTER,
-        spaceAfter=4 * mm,
-        fontName='Helvetica-Bold',
-    )
-    date_style = ParagraphStyle(
-        'DateRange',
-        parent=base['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#888888'),
-        alignment=TA_CENTER,
-        spaceAfter=8 * mm,
-        fontName='Helvetica',
-    )
-    section_style = ParagraphStyle(
-        'SectionHeader',
-        parent=base['Normal'],
-        fontSize=13,
-        leading=16,
-        textColor=colors.HexColor('#444444'),
-        fontName='Helvetica-Bold',
-        spaceBefore=6 * mm,
-        spaceAfter=3 * mm,
-    )
-    big_headline_style = ParagraphStyle(
-        'BigHeadline',
-        parent=base['Normal'],
-        fontSize=16,
-        leading=20,
-        textColor=colors.HexColor('#1a1a2e'),
-        fontName='Helvetica-Bold',
-        spaceBefore=5 * mm,
-        spaceAfter=2 * mm,
-    )
-    summary_style = ParagraphStyle(
-        'Summary',
-        parent=base['Normal'],
-        fontSize=11,
-        leading=15,
-        textColor=colors.HexColor('#333333'),
-        fontName='Helvetica',
-        spaceAfter=1 * mm,
-    )
-    link_style = ParagraphStyle(
-        'Link',
-        parent=base['Normal'],
-        fontSize=9,
-        textColor=colors.HexColor('#0077cc'),
-        fontName='Helvetica',
-        spaceAfter=4 * mm,
-    )
-    minor_item_style = ParagraphStyle(
-        'MinorItem',
-        parent=base['Normal'],
-        fontSize=11,
-        leading=15,
-        textColor=colors.HexColor('#333333'),
-        fontName='Helvetica',
-    )
+def _meta_text(item):
+    parts = []
+    if item.get("source"):
+        parts.append(item["source"])
+    if item.get("time"):
+        parts.append(item["time"])
+    return " | ".join(parts)
 
-    story = []
 
-    story.append(Paragraph("Daily Digest", title_style))
-    story.append(Paragraph(digest.get("date_range", ""), date_style))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#dddddd')))
+def _deep_item_node(item):
+    meta = _meta_text(item)
+    headline = item.get("headline", "")
+    link = item.get("link", "")
+    label = f"כתבה מ-{meta}: " if meta else ""
+    children = [label + headline]
+    if link:
+        children += [" — ", {"tag": "a", "attrs": {"href": link}, "children": ["לקריאה"]}]
+    return {"tag": "p", "children": children}
 
-    big_news = digest.get("big_news", [])
-    if big_news:
-        story.append(Paragraph("Top Stories", section_style))
-        for item in big_news:
-            story.append(Paragraph(item.get("headline", ""), big_headline_style))
-            if item.get("summary"):
-                story.append(Paragraph(item["summary"], summary_style))
+
+def _section_nodes(items_big, items_minor, is_deep=False):
+    nodes = []
+    if is_deep:
+        return [_deep_item_node(i) for i in items_big + items_minor]
+    for item in items_big:
+        nodes.append({"tag": "h4", "children": [item.get("headline", "")]})
+        meta = _meta_text(item)
+        if meta:
+            nodes.append({"tag": "p", "children": [{"tag": "i", "children": [meta]}]})
+        if item.get("summary"):
+            nodes.append({"tag": "p", "children": [item["summary"]]})
+        if item.get("link"):
+            nodes.append({"tag": "p", "children": [
+                {"tag": "a", "attrs": {"href": item["link"]}, "children": ["קישור למקור"]}
+            ]})
+    if items_minor:
+        li_nodes = []
+        for item in items_minor:
+            meta = _meta_text(item)
+            children = [item.get("headline", "")]
+            if meta:
+                children += [f" ({meta})"]
             if item.get("link"):
-                story.append(Paragraph(
-                    f'<a href="{item["link"]}" color="#0077cc">{item["link"]}</a>',
-                    link_style
-                ))
-            story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor('#eeeeee')))
+                children += [" — ", {"tag": "a", "attrs": {"href": item["link"]}, "children": ["קישור"]}]
+            li_nodes.append({"tag": "li", "children": children})
+        nodes.append({"tag": "ul", "children": li_nodes})
+    return nodes
 
-    minor_news = digest.get("minor_news", [])
-    if minor_news:
-        story.append(Spacer(1, 4 * mm))
-        story.append(Paragraph("Also Today", section_style))
-        items = []
-        for item in minor_news:
-            headline = item.get("headline", "")
-            link = item.get("link", "")
-            text = f'<a href="{link}" color="#0077cc">{headline}</a>' if link else headline
-            items.append(ListItem(
-                Paragraph(text, minor_item_style),
-                leftIndent=10,
-                bulletColor=colors.HexColor('#888888')
-            ))
-        story.append(ListFlowable(items, bulletType='bullet', leftIndent=15, bulletFontSize=8))
 
-    doc.build(story)
-    logging.info(f"PDF written to {output_path}")
-    return output_path
+def publish_to_telegraph(digest: dict) -> str:
+    from telegraph import Telegraph
+
+    token_path = Path(TOKEN_FILE)
+    if token_path.exists():
+        t = Telegraph(access_token=token_path.read_text().strip())
+    else:
+        t = Telegraph()
+        t.create_account(short_name="daily-digest", author_name="דיג'סט יומי")
+        token_path.write_text(t.get_access_token())
+
+    sections = [
+        ("עדכוני לחימה והסכסוך", "conflict", False),
+        ("פוליטיקה ישראלית", "politics", False),
+        ("כותרות נוספות", "world", False),
+        ("לקריאה נוספת", "deep", True),
+    ]
+
+    content = []
+    for heading, key, is_deep in sections:
+        big = [i for i in digest.get("big_news", []) if i.get("section") == key]
+        minor = [i for i in digest.get("minor_news", []) if i.get("section") == key]
+        if not big and not minor:
+            continue
+        content.append({"tag": "h3", "children": [heading]})
+        content.extend(_section_nodes(big, minor, is_deep=is_deep))
+
+    title = f"דיג'סט יומי — {digest['date_range']}"
+    page = t.create_page(title=title, content=content, author_name="דיג'סט יומי")
+    return page['url']
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +287,7 @@ async def fetch_messages(channel_username: str, start_date: datetime, end_date: 
 # ---------------------------------------------------------------------------
 
 async def main():
-    parser = argparse.ArgumentParser(description='Generate daily Telegram digest as PDF.')
+    parser = argparse.ArgumentParser(description='Generate daily Telegram digest as Telegraph page.')
     parser.add_argument('--startdate', type=str, help='Start datetime YYYY-MM-DD or YYYY-MM-DD HH:MM (UTC)')
     parser.add_argument('--enddate', type=str, help='End datetime YYYY-MM-DD or YYYY-MM-DD HH:MM (UTC)')
     args = parser.parse_args()
@@ -355,13 +333,12 @@ async def main():
         await client.disconnect()
         return
 
-    pdf_path = f"digest_{start_date.strftime('%Y-%m-%d')}.pdf"
-    build_pdf(digest, pdf_path)
+    page_url = publish_to_telegraph(digest)
+    logging.info(f"Telegraph page: {page_url}")
 
     target = int(TARGET_CHANNEL) if TARGET_CHANNEL.lstrip('-').isdigit() else TARGET_CHANNEL
-    caption = f"Daily Digest — {digest.get('date_range', '')}"
-    await client.send_file(target, pdf_path, caption=caption)
-    logging.info(f"PDF sent to {TARGET_CHANNEL}")
+    date_str = start_date.strftime('%d.%m.%Y')
+    await client.send_message(target, f"📰 דיג'סט יומי — {date_str}\n{page_url}")
 
     await client.disconnect()
 
